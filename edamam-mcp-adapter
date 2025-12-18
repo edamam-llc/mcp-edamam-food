@@ -1,0 +1,211 @@
+// server.js - Backend Adapter pentru Edamam MCP
+import express from 'express';
+import cors from 'cors';
+import axios from 'axios';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// URL-ul MCP Server-ului tău de pe Railway
+const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8000';
+
+app.use(cors());
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Backend Adapter is running' });
+});
+
+// Helper function pentru JSON-RPC calls către MCP
+async function callMCPTool(toolName, args) {
+  try {
+    const response = await axios.post(`${MCP_SERVER_URL}/v1/rpc`, {
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        name: toolName,
+        arguments: args
+      },
+      id: Date.now()
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('MCP Tool Call Error:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// ENDPOINT 1: Search Food
+// n8n poate apela: POST /api/search-food
+app.post('/api/search-food', async (req, res) => {
+  try {
+    const { query, limit = 10 } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    console.log(`[SEARCH FOOD] Query: ${query}, Limit: ${limit}`);
+
+    const result = await callMCPTool('search_food', {
+      query: query,
+      limit: limit
+    });
+
+    // Extrage rezultatul din răspunsul MCP
+    const foods = result.result?.content?.[0]?.text 
+      ? JSON.parse(result.result.content[0].text) 
+      : result.result;
+
+    res.json({
+      success: true,
+      data: foods
+    });
+
+  } catch (error) {
+    console.error('Search Food Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ENDPOINT 2: Get Nutrition
+// n8n poate apela: POST /api/get-nutrition
+app.post('/api/get-nutrition', async (req, res) => {
+  try {
+    const { query, quantity, unit = 'g' } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    console.log(`[GET NUTRITION] Query: ${query}, Quantity: ${quantity}${unit}`);
+
+    const result = await callMCPTool('get_food_nutrition', {
+      query: query,
+      quantity: quantity || 100,
+      unit: unit
+    });
+
+    // Extrage rezultatul din răspunsul MCP
+    const nutrition = result.result?.content?.[0]?.text 
+      ? JSON.parse(result.result.content[0].text) 
+      : result.result;
+
+    res.json({
+      success: true,
+      data: nutrition
+    });
+
+  } catch (error) {
+    console.error('Get Nutrition Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ENDPOINT 3: Analyze Food Image
+// n8n poate apela: POST /api/analyze-image
+app.post('/api/analyze-image', async (req, res) => {
+  try {
+    const { image_url, image_base64 } = req.body;
+
+    if (!image_url && !image_base64) {
+      return res.status(400).json({ 
+        error: 'Either image_url or image_base64 is required' 
+      });
+    }
+
+    console.log(`[ANALYZE IMAGE] Processing food image...`);
+
+    const args = image_url 
+      ? { image_url } 
+      : { image_base64 };
+
+    const result = await callMCPTool('analyze_food_image', args);
+
+    // Extrage rezultatul din răspunsul MCP
+    const analysis = result.result?.content?.[0]?.text 
+      ? JSON.parse(result.result.content[0].text) 
+      : result.result;
+
+    res.json({
+      success: true,
+      data: analysis
+    });
+
+  } catch (error) {
+    console.error('Analyze Image Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ENDPOINT 4: Conversational endpoint pentru n8n AI Agent
+// Acesta permite AI agent-ul să decidă ce tool să folosească
+app.post('/api/meal-tracker', async (req, res) => {
+  try {
+    const { message, intent, parameters } = req.body;
+
+    console.log(`[MEAL TRACKER] Message: ${message}`);
+    console.log(`[MEAL TRACKER] Intent: ${intent}`);
+
+    let result;
+
+    // În funcție de intent, apelează tool-ul potrivit
+    switch (intent) {
+      case 'search_food':
+        result = await callMCPTool('search_food', parameters);
+        break;
+      
+      case 'get_nutrition':
+        result = await callMCPTool('get_food_nutrition', parameters);
+        break;
+      
+      case 'analyze_image':
+        result = await callMCPTool('analyze_food_image', parameters);
+        break;
+      
+      default:
+        return res.status(400).json({ 
+          error: 'Invalid intent. Use: search_food, get_nutrition, or analyze_image' 
+        });
+    }
+
+    const data = result.result?.content?.[0]?.text 
+      ? JSON.parse(result.result.content[0].text) 
+      : result.result;
+
+    res.json({
+      success: true,
+      intent: intent,
+      data: data
+    });
+
+  } catch (error) {
+    console.error('Meal Tracker Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Backend Adapter running on port ${PORT}`);
+  console.log(`📡 MCP Server URL: ${MCP_SERVER_URL}`);
+  console.log(`\nAvailable endpoints:`);
+  console.log(`  POST /api/search-food`);
+  console.log(`  POST /api/get-nutrition`);
+  console.log(`  POST /api/analyze-image`);
+  console.log(`  POST /api/meal-tracker`);
+});
