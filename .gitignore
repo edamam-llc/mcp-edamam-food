@@ -5,3 +5,11 @@ __pycache__/
 .idea/
 .vscode/
 .DS_Store
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Python version
+.python-version

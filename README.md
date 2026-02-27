@@ -1,180 +1,540 @@
-# edamam-mcp
+# Edamam Food Database MCP Server
 
-Machine Connector Processor (MCP) for the **Edamam Food Database API**.
-This service exposes a small, LLM‑friendly interface for:
+A **Model Context Protocol (MCP)** server for the Edamam Food Database API, implementing the official [MCP specification (2025-03-26)](https://modelcontextprotocol.io/specification/2025-03-26/basic) with full JSON-RPC 2.0 support.
 
-- Looking up nutrition for foods by free‑text query (`get_food_nutrition`)
-- Searching foods and getting candidate matches (`search_food`)
-- Analyzing food images and returning ingredients + nutrition (`get_nutrition_from_image`)
+## Features
 
-It is designed to be discovered at runtime by an LLM through a `/v1/mcp/schema`
-endpoint that returns a function schema and a system prompt.
+- ✅ **Full MCP Protocol Compliance**: Implements JSON-RPC 2.0 specification
+- ✅ **Single Endpoint**: `/mcp/food-database/v1` for all operations
+- ✅ **Standard Methods**: `initialize`, `ping`, `tools/list`, `tools/call`
+- ✅ **Three Tools**: Search foods, get nutrition, analyze food images
+- ✅ **UPC/Barcode Support**: Automatically detects 8-14 digit codes
+- ✅ **Image URL Auto-detection**: Seamlessly redirects image URLs
+- ✅ **Proper Error Handling**: JSON-RPC error codes and tool execution errors
+- ✅ **Capability Negotiation**: Full lifecycle management
 
-## Repository layout
+## Quick Start
 
-```text
-edamam-mcp/
-  app/
-    main.py               # FastAPI entrypoint
-    routers/
-      ai_router.py        # /v1/ai/query – main MCP endpoint
-      meta_router.py      # /v1/mcp/schema – MCP metadata for LLMs
-    services/
-      edamam_service.py   # Thin wrapper(s) around Edamam Food Database API
-    utils/
-      logger.py           # Shared logging helpers
-  docs/
-    01-overview.md
-    02-api-reference.md
-    03-examples.md
-    04-llm-integration.md
-  requirements.txt  (or pyproject.toml)
-  .gitignore
-  README.md
+### Prerequisites
+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- Edamam Food Database API credentials ([get them here](https://developer.edamam.com/))
+
+### Installation
+
+```bash
+# Clone repository
+git clone https://github.com/edamam/mcp-edamam-food.git
+cd mcp-edamam-food
+
+# Install dependencies
+uv sync --extra dev
+
+# Set credentials
+export EDAMAM_APP_ID="your_app_id_here"
+export EDAMAM_APP_KEY="your_app_key_here"
+
+# Run server
+./run.sh
 ```
 
-## Quickstart
+The server will start on `http://localhost:8000/mcp/food-database/v1`
 
-1. Create and activate a virtual environment (optional but recommended).
-2. Install dependencies:
+## MCP Protocol Implementation
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Endpoint
 
-3. Export the required environment variables:
+**Single endpoint for all operations:**
+```
+POST http://localhost:8000/mcp/food-database/v1
+```
 
-   ```bash
-   export EDAMAM_APP_ID=...
-   export EDAMAM_APP_KEY=...
-   # optionally:
-   # export EDAMAM_FOODDB_BASE_URL=https://api.edamam.com/api/food-database/v2
-   ```
+### JSON-RPC 2.0 Methods
 
-4. Run the API:
+#### 1. `initialize`
 
-   ```bash
-   uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-   ```
+Initialize the MCP session and negotiate capabilities.
 
-5. Open:
-
-   - Swagger UI: `http://127.0.0.1:8000/docs`
-   - MCP schema: `http://127.0.0.1:8000/v1/mcp/schema`
-
-## MCP endpoints
-
-- `GET /v1/mcp/schema`  
-  Returns a JSON object containing:
-
-  - `system_prompt` – text to inject as the LLM system message
-  - `functions` – OpenAI‑style function schema definitions
-  - optional `examples` – example user queries + suggested function and arguments
-
-- `POST /v1/ai/query`  
-  Main MCP execution endpoint. It accepts payloads of the form:
-
-  ```json
-  {
-    "intent": "get_food_nutrition" | "search_food" | "analyze_food_image",
-    "parameters": {
-      "...": "..."
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "your-client",
+      "version": "1.0.0"
     }
   }
-  ```
+}
+```
 
-### Supported intents
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {
+      "tools": {
+        "listChanged": false
+      }
+    },
+    "serverInfo": {
+      "name": "edamam-food-database",
+      "version": "2.0.0"
+    },
+    "instructions": "..."
+  }
+}
+```
 
-1. **`get_food_nutrition`**
+#### 2. `ping`
 
-   Input parameters (in `parameters`):
+Health check to verify connection is alive.
 
-   - `query` (string, optional) – free text like `"100g chicken breast"` or `"banana"`
-   - `foodId` (string, optional) – Edamam `foodId` if already known
-   - `quantity` (number, default `100`) – amount in grams
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "ping"
+}
+```
 
-   Output (example shape):
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {}
+}
+```
 
-   ```json
-   {
-     "food": "Cooked Chicken Breast",
-     "quantity": 100,
-     "nutrients": {
-       "ENERC_KCAL": { "label": "Energy", "quantity": 165, "unit": "kcal" },
-       "PROCNT": { "label": "Protein", "quantity": 31, "unit": "g" },
-       "...": {}
-     }
-   }
-   ```
+#### 3. `tools/list`
 
-2. **`search_food`**
+List available tools.
 
-   Input parameters:
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/list",
+  "params": {}
+}
+```
 
-   - `query` (string, required) – search term, e.g. `"almonds"`
-   - `limit` (integer, default `5`) – max number of candidates
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "tools": [
+      {
+        "name": "get_food_nutrition",
+        "description": "Get detailed nutrition information...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string", "description": "..."},
+            "quantity": {"type": "number", "default": 100.0}
+          },
+          "required": ["query"]
+        }
+      },
+      ...
+    ]
+  }
+}
+```
 
-   Output (example shape):
+#### 4. `tools/call`
 
-   ```json
-   {
-     "query": "almonds",
-     "results": [
-       {
-         "label": "Nuts, Almonds",
-         "foodId": "food_bq4d2wras281i0br37nrnaglo3yc",
-         "category": "Generic foods",
-         "nutrients": {
-           "ENERC_KCAL": 579,
-           "PROCNT": 21.2,
-           "FAT": 49.9
-         },
-         "image": "https://..."
-       }
-     ]
-   }
-   ```
+Execute a tool.
 
-3. **`analyze_food_image`**
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "search_food",
+    "arguments": {
+      "query": "banana"
+    }
+  }
+}
+```
 
-   Input parameters:
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "**Search Results for 'banana':**\n\n..."
+      }
+    ],
+    "isError": false
+  }
+}
+```
 
-   - `image` (string, required) – direct URL to a food image
+## Available Tools
 
-   Output (example shape):
+### 1. get_food_nutrition
 
-   ```json
-   {
-     "analysis_type": "image",
-     "source": "https://.../food.jpg",
-     "food": "Grilled Chicken Breast With Lemon and Herbs",
-     "ingredients_list": "Boneless, skinless chicken breast, Olive oil, herbs, ...",
-     "serving_weight_grams": 195.33,
-     "nutrients": {
-       "ENERC_KCAL": { "label": "Energy", "quantity": 336.5, "unit": "kcal" },
-       "...": {}
-     },
-     "recipe": {
-       "uri": "http://www.edamam.com/ontologies/edamam.owl#recipe_...",
-       "calories": 336,
-       "totalWeight": 195.33,
-       "dietLabels": [...],
-       "healthLabels": [...],
-       "cautions": [...]
-     }
-   }
-   ```
+Get detailed nutrition information for a food item.
 
-## LLM integration
+**Parameters:**
+- `query` (string, required): Food name, UPC/barcode code, or image URL
+- `quantity` (number, optional): Amount in grams (default: 100.0)
 
-The typical integration pattern is:
+**Features:**
+- Automatically detects UPC codes (8-14 digits)
+- Auto-redirects image URLs to image analysis
+- Returns comprehensive nutrition data
 
-1. At startup, the client fetches `/v1/mcp/schema`.
-2. It injects the provided `system_prompt` into the LLM system message.
-3. It passes the `functions` array as `functions` (or `tools`) to the LLM API.
-4. When the model responds with a function/tool call:
-   - Map `function.name` to one of the intents.
-   - Call `POST /v1/ai/query` with `{ "intent": ..., "parameters": ... }`.
-   - Feed the JSON result back to the LLM as a tool/function result message.
+**Example:**
+```json
+{
+  "name": "get_food_nutrition",
+  "arguments": {
+    "query": "banana",
+    "quantity": 100
+  }
+}
+```
 
-See the companion **edamam-mcp-client** repository for a working example using FastAPI + WebSocket + OpenAI Chat Completions.
+### 2. search_food
+
+Search for foods in the Edamam database.
+
+**Parameters:**
+- `query` (string, required): Food name or UPC/barcode code
+- `limit` (integer, optional): Max results (default: 5)
+
+**Features:**
+- Handles UPC/barcode searches
+- Returns foodId for detailed lookups
+- Includes basic nutrition per 100g
+
+**Example:**
+```json
+{
+  "name": "search_food",
+  "arguments": {
+    "query": "apple"
+  }
+}
+```
+
+### 3. analyze_food_image
+
+Analyze a food image and extract nutrition.
+
+**Parameters:**
+- `image_url` (string, required): URL of food image (HTTP/HTTPS)
+
+**Features:**
+- Detects ingredients from image
+- Calculates total nutrition
+- Uses Edamam's beta image API
+
+**Example:**
+```json
+{
+  "name": "analyze_food_image",
+  "arguments": {
+    "image_url": "https://example.com/salad.jpg"
+  }
+}
+```
+
+## Testing
+
+### Manual Testing
+
+Use the included test script:
+
+```bash
+chmod +x test_mcp.sh
+./test_mcp.sh
+```
+
+### With curl
+
+```bash
+# 1. Initialize
+curl -X POST http://localhost:8000/mcp/food-database/v1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": {"name": "test", "version": "1.0.0"}
+    }
+  }'
+
+# 2. List tools
+curl -X POST http://localhost:8000/mcp/food-database/v1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/list"
+  }'
+
+# 3. Call a tool
+curl -X POST http://localhost:8000/mcp/food-database/v1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "search_food",
+      "arguments": {"query": "banana"}
+    }
+  }'
+```
+
+### With MCP Client
+
+```python
+import httpx
+import json
+
+BASE_URL = "http://localhost:8000/mcp/food-database/v1"
+
+async def call_mcp(method, params=None, id=1):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method
+    }
+    if params:
+        payload["params"] = params
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(BASE_URL, json=payload)
+        return response.json()
+
+# Initialize
+result = await call_mcp("initialize", {
+    "protocolVersion": "2025-03-26",
+    "capabilities": {},
+    "clientInfo": {"name": "my-client", "version": "1.0.0"}
+})
+
+# List tools
+tools = await call_mcp("tools/list")
+
+# Call tool
+nutrition = await call_mcp("tools/call", {
+    "name": "get_food_nutrition",
+    "arguments": {"query": "banana", "quantity": 100}
+})
+```
+
+## Error Handling
+
+The server implements proper JSON-RPC 2.0 error handling:
+
+### Protocol Errors
+
+Standard JSON-RPC error codes:
+
+| Code | Message | Description |
+|------|---------|-------------|
+| -32700 | Parse error | Invalid JSON |
+| -32600 | Invalid Request | Invalid JSON-RPC request |
+| -32601 | Method not found | Unknown method |
+| -32602 | Invalid params | Invalid parameters |
+| -32603 | Internal error | Server error |
+
+**Example:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32601,
+    "message": "Method not found: invalid_method"
+  }
+}
+```
+
+### Tool Execution Errors
+
+Errors during tool execution are returned in the result with `isError: true`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Failed to retrieve nutrition information: API timeout"
+      }
+    ],
+    "isError": true
+  }
+}
+```
+
+## Architecture
+
+### Protocol Flow
+
+```
+Client                      Server
+  │                           │
+  ├─ initialize ─────────────>│
+  │<─ capabilities ───────────┤
+  │                           │
+  ├─ tools/list ─────────────>│
+  │<─ tool schemas ───────────┤
+  │                           │
+  ├─ tools/call ─────────────>│
+  │  (get_food_nutrition)     │
+  │<─ nutrition data ─────────┤
+  │                           │
+  ├─ ping ───────────────────>│
+  │<─ {} ─────────────────────┤
+```
+
+### Directory Structure
+
+```
+mcp-edamam-food/
+├── src/
+│   ├── mcp_server_v2.py      # MCP JSON-RPC 2.0 server
+│   ├── edamam_service.py     # Edamam API service layer
+│   └── logger.py             # Logging configuration
+├── tests/
+│   ├── conftest.py           # Pytest fixtures
+│   ├── test_edamam_service.py
+│   └── ...
+├── logs/
+│   └── mcp_requests.log      # Request logs
+├── run.sh                    # Server startup script
+├── test_mcp.sh               # MCP testing script
+└── README.md
+```
+
+## Configuration
+
+### Environment Variables
+
+**Required:**
+- `EDAMAM_APP_ID`: Your Edamam application ID
+- `EDAMAM_APP_KEY`: Your Edamam API key
+
+**Optional:**
+- `LOG_LEVEL`: Logging level (default: INFO)
+
+### Server Configuration
+
+Edit `src/mcp_server_v2.py` to configure:
+- `MCP_ENDPOINT`: API endpoint path
+- `SERVER_NAME`: Server identifier
+- `SERVER_VERSION`: Server version
+
+## Logging
+
+All requests are logged to `logs/mcp_requests.log`:
+
+```
+[2025-02-16 12:00:00] [INFO] Initialization request from test-client v1.0.0
+[2025-02-16 12:00:01] [INFO] Server initialized successfully
+[2025-02-16 12:00:02] [INFO] Tool call: search_food with args: {'query': 'banana'}
+```
+
+## Deployment
+
+### Development
+
+```bash
+export EDAMAM_APP_ID="your_id"
+export EDAMAM_APP_KEY="your_key"
+./run.sh
+```
+
+### Production
+
+Use a process manager like systemd:
+
+```ini
+[Unit]
+Description=Edamam MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=mcp-user
+WorkingDirectory=/path/to/mcp-edamam-food
+Environment="EDAMAM_APP_ID=your_id"
+Environment="EDAMAM_APP_KEY=your_key"
+ExecStart=/usr/local/bin/uv run python src/mcp_server_v2.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### With Docker
+
+```dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+RUN pip install uv
+COPY . .
+RUN uv sync
+EXPOSE 8000
+CMD ["uv", "run", "python", "src/mcp_server_v2.py"]
+```
+
+## Specification Compliance
+
+This server implements the [Model Context Protocol specification (2025-03-26)](https://modelcontextprotocol.io/specification/2025-03-26/basic):
+
+- ✅ JSON-RPC 2.0 message format
+- ✅ Lifecycle management (initialize/ping)
+- ✅ Tool discovery (tools/list)
+- ✅ Tool execution (tools/call)
+- ✅ Proper error handling
+- ✅ Capability negotiation
+
+## Resources
+
+- [MCP Specification](https://modelcontextprotocol.io/specification/2025-03-26/basic)
+- [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
+- [Edamam Food Database API](https://developer.edamam.com/food-database-api)
+
+## Support
+
+For issues and questions:
+- Open an issue on GitHub
+- Check the MCP specification
+- Review the test files for usage examples
+
+## License
+
+See [LICENSE](LICENSE) file.
